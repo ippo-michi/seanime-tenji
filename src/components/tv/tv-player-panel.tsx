@@ -13,7 +13,7 @@ import type { PlayerPanel } from "@/components/features/player/types"
 import { TVDrawer } from "@/components/tv/tv-drawer"
 import { TVButton, useTVFocus } from "@/components/tv/tv-focus"
 import { tvSize } from "@/components/tv/tv-scale"
-import type { PlayerPreferences } from "@/lib/player/player-preferences"
+import { findPreferredTrack, type PlayerPreferences } from "@/lib/player/player-preferences"
 import type { PlayerState, PlayerTrack } from "@/lib/player/types"
 import type { MpvVideoOutput } from "expo-mpv-player"
 import {
@@ -25,6 +25,7 @@ import {
     Cpu,
     Gauge,
     List,
+    Languages,
     Mic2,
     RotateCw,
     SkipForward,
@@ -72,6 +73,7 @@ const TITLES: Partial<Record<PlayerPanel, string>> = {
     "subtitle-size": "Subtitle size",
     "audio-tracks": "Audio tracks",
     "subtitle-tracks": "Subtitle tracks",
+    "default-subtitle-lang": "Subtitle preference",
 }
 
 const ICON = tvSize(21)
@@ -197,6 +199,8 @@ function PanelContent(props: Props & { preferred: boolean }) {
                 }}
                 preferred={props.preferred}
             />
+        case "default-subtitle-lang":
+            return <SubtitlePreference {...props} />
         default:
             return (
                 <View style={{ padding: tvSize(30) }}>
@@ -284,6 +288,14 @@ function TracksHome(props: Props & { preferred: boolean }) {
             press: () => props.onNavigate("subtitle-tracks"),
         },
         {
+            label: "Subtitle preference",
+            detail: props.prefs.showSubtitles
+                ? subtitlePreferenceName(props.prefs.preferredSubtitleLanguages)
+                : "Always off",
+            icon: <Languages size={ICON} color="#ffffff" />,
+            press: () => props.onNavigate("default-subtitle-lang"),
+        },
+        {
             label: "Subtitle delay",
             detail: delayLabel(props.state.subtitleDelay),
             icon: <Timer size={ICON} color="#ffffff" />,
@@ -300,6 +312,69 @@ function TracksHome(props: Props & { preferred: boolean }) {
             detail: `${props.prefs.subtitleFontSize}`,
             icon: <Type size={ICON} color="#ffffff" />,
             press: () => props.onNavigate("subtitle-size"),
+        },
+    ]
+
+    return <ButtonList rows={rows} preferred={props.preferred} />
+}
+
+const SUBTITLE_LANGUAGE_PRESETS = [
+    { label: "Japanese", value: "jpn, jp, ja, japanese" },
+    { label: "English", value: "eng, en, english" },
+    { label: "German", value: "deu, ger, de, german" },
+    { label: "French", value: "fra, fre, fr, french" },
+    { label: "Spanish", value: "spa, es, spanish" },
+    { label: "Portuguese", value: "por, pt, portuguese" },
+    { label: "Italian", value: "ita, it, italian" },
+    { label: "Korean", value: "kor, ko, korean" },
+    { label: "Chinese", value: "zho, chi, zh, chinese" },
+] as const
+
+function subtitlePreferenceName(value: string) {
+    const normalized = value.trim().toLowerCase()
+
+    return SUBTITLE_LANGUAGE_PRESETS.find(
+        preset => preset.value === normalized,
+    )?.label ?? (value.trim() || "Default")
+}
+
+function SubtitlePreference(props: Props & { preferred: boolean }) {
+    const selectLanguage = (value: string) => {
+        const trackId = findPreferredTrack(
+            props.state.subtitleTracks,
+            value,
+            props.prefs.ignoredSubtitleLabels,
+        )
+
+        // Apply immediately to the current episode.
+        // -1 disables subtitles, but we restore showSubtitles=true below
+        // so future episodes continue looking for the preferred language.
+        props.onSetSubtitleTrack(trackId ?? -1)
+
+        props.updatePrefs({
+            preferredSubtitleLanguages: value,
+            showSubtitles: true,
+        })
+
+        props.onNavigate("audio-subtitles")
+    }
+
+    const rows: Row[] = [
+        ...SUBTITLE_LANGUAGE_PRESETS.map(preset => ({
+            label: preset.label,
+            detail: "Only this language · otherwise subtitles off",
+            icon: <Languages size={ICON} color="#ffffff" />,
+            press: () => selectLanguage(preset.value),
+        })),
+        {
+            label: "Always off",
+            detail: "Never enable subtitles automatically",
+            icon: <Captions size={ICON} color="#ffffff" />,
+            press: () => {
+                props.onSetSubtitleTrack(-1)
+                props.updatePrefs({ showSubtitles: false })
+                props.onNavigate("audio-subtitles")
+            },
         },
     ]
 

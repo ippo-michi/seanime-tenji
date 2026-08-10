@@ -458,7 +458,27 @@ export function useMpvPlayer() {
                 if (currentSub?.id !== preferredSub) {
                     log.info(`Auto-selecting preferred subtitle track: ${preferredSub}`)
                     runNativeCommand("setSubtitleTrack", nativeRef => nativeRef.setSubtitleTrack(preferredSub))
+                    setState(s => ({
+                        ...s,
+                        activeSubtitleTrackId: preferredSub,
+                        subtitleTracks: s.subtitleTracks.map(t => ({
+                            ...t,
+                            selected: t.id === preferredSub,
+                        })),
+                    }))
                 }
+            } else {
+                log.info("No preferred subtitle track found; disabling subtitles")
+                runNativeCommand("disableSubtitles", nativeRef => nativeRef.disableSubtitles())
+                runNativeCommand("setSubtitleVisibility", nativeRef => nativeRef.setSubtitleVisibility(false))
+                setState(s => ({
+                    ...s,
+                    activeSubtitleTrackId: null,
+                    subtitleTracks: s.subtitleTracks.map(t => ({
+                        ...t,
+                        selected: false,
+                    })),
+                }))
             }
         } else {
             runNativeCommand("disableSubtitles", ref => ref.disableSubtitles())
