@@ -14,6 +14,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
 
+    env:
+      EXPO_TV: "1"
+      SEANIME_TV_DEV: "1"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,13 +26,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
       - name: Generate tvOS project
-        env:
-          EXPO_TV: "1"
-          SEANIME_TV_DEV: "1"
         run: npx expo prebuild --platform ios --clean
 
       - name: Install CocoaPods
@@ -37,42 +39,63 @@ jobs:
           pod install
           cd ..
 
-      - name: Find Xcode scheme
+      - name: Find Tenji app scheme
         id: xcode
         run: |
-          set -e
+          set -euxo pipefail
 
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
 
           if [ -z "$WORKSPACE" ]; then
             echo "No Xcode workspace found"
+            find ios -maxdepth 2 -print
             exit 1
           fi
 
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -list \
-            -json > /tmp/xcode-list.json
+          # Find a shared scheme belonging to the actual app project,
+          # never one of the hundreds of CocoaPods schemes.
+          SCHEME_FILE="$(find ios \
+            -type f \
+            -path '*/xcshareddata/xcschemes/*.xcscheme' \
+            ! -path '*/Pods/*' \
+            -print -quit)"
 
-          SCHEME="$(python3 - <<'PY'
-          import json
+          if [ -z "$SCHEME_FILE" ]; then
+            echo "No application scheme file found."
+            echo "Available shared schemes:"
+            find ios -type f -name '*.xcscheme' -print
+            exit 1
+          fi
 
-          with open("/tmp/xcode-list.json", "r") as f:
-              data = json.load(f)
-
-          schemes = data.get("workspace", {}).get("schemes", [])
-
-          if not schemes:
-              raise SystemExit("No Xcode schemes found")
-
-          non_pod = [s for s in schemes if not s.lower().startswith("pods")]
-
-          print(non_pod[0] if non_pod else schemes[0])
-          PY
-          )"
+          SCHEME="$(basename "$SCHEME_FILE" .xcscheme)"
 
           echo "Workspace: $WORKSPACE"
+          echo "Scheme file: $SCHEME_FILE"
           echo "Scheme: $SCHEME"
+
+          echo
+          echo "Available workspace schemes:"
+          xcodebuild -workspace "$WORKSPACE" -list
+
+          echo
+          echo "Checking selected scheme build settings..."
+
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk appletvos \
+            -showBuildSettings > /tmp/build-settings.txt
+
+          grep -E \
+            'PRODUCT_NAME|PRODUCT_TYPE|WRAPPER_EXTENSION|SDKROOT|SUPPORTED_PLATFORMS' \
+            /tmp/build-settings.txt || true
+
+          if ! grep -q 'WRAPPER_EXTENSION = app' /tmp/build-settings.txt; then
+            echo "Selected scheme is not an application target."
+            cat /tmp/build-settings.txt
+            exit 1
+          fi
 
           echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
@@ -92,28 +115,42 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
+      - name: Find built tvOS app
+        id: app
+        run: |
+          set -euxo pipefail
+
+          echo "Build products:"
+          find build/Build/Products -maxdepth 4 -print
+
+          APP="$(find build/Build/Products \
+            -type d \
+            -name '*.app' \
+            ! -name '*Tests.app' \
+            -print -quit)"
+
+          if [ -z "$APP" ]; then
+            echo "No tvOS .app was produced."
+            exit 1
+          fi
+
+          echo "Found app: $APP"
+          echo "path=$APP" >> "$GITHUB_OUTPUT"
+
       - name: Package unsigned IPA
         run: |
           set -euxo pipefail
 
-          APP="$(find build/Build/Products \
-            -type d \
-            -path '*Release-appletvos*' \
-            -name '*.app' \
-            -print -quit)"
-
-          if [ -z "$APP" ]; then
-            echo "No tvOS app was produced."
-            find build/Build/Products -maxdepth 5 -print || true
-            exit 1
-          fi
-
+          rm -rf Payload
           mkdir Payload
-          cp -R "$APP" Payload/
+
+          cp -R "${{ steps.app.outputs.path }}" Payload/
 
           zip -qry \
             Seanime-Tenji-tvOS-subtitle-preferences-unsigned.ipa \
             Payload
+
+          ls -lh Seanime-Tenji-tvOS-subtitle-preferences-unsigned.ipa
 
       - name: Upload build
         uses: actions/upload-artifact@v4
