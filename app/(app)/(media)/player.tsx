@@ -983,6 +983,51 @@ function PlayerScreenInner() {
         playNextEpisode,
     })
 
+    // Torrent/debrid streams can reach native EOF before the normal near-end
+    // auto-next countdown gets a chance to finish. Ensure a real EOF advances
+    // to the next episode as long as automatic next-episode playback is allowed.
+    //
+    // Delay very slightly so the normal auto-next hook gets first chance to
+    // handle the transition. If it changes the source, this effect is cleaned up.
+    const torrentDebridEofAdvanceRef = React.useRef<string | null>(null)
+
+    React.useEffect(() => {
+        if (!source?.id
+            || !state.eofReached
+            || !prefs.autoNextEpisode
+            || !canAutoAdvance) {
+            return
+        }
+
+        const action = source.nextEpisodeAction
+        const isTorrentOrDebridAutoAdvance = action === "torrentstream-auto-select"
+            || action === "torrentstream-previous-batch"
+            || action === "debridstream-auto-select"
+            || action === "debridstream-previous-batch"
+
+        if (!isTorrentOrDebridAutoAdvance) return
+        if (torrentDebridEofAdvanceRef.current === source.id) return
+
+        const sourceId = source.id
+        const timer = setTimeout(() => {
+            if (torrentDebridEofAdvanceRef.current === sourceId) return
+
+            torrentDebridEofAdvanceRef.current = sourceId
+            autoNext.cancelAutoNext()
+            playNextEpisode()
+        }, 150)
+
+        return () => clearTimeout(timer)
+    }, [
+        autoNext.cancelAutoNext,
+        canAutoAdvance,
+        playNextEpisode,
+        prefs.autoNextEpisode,
+        source?.id,
+        source?.nextEpisodeAction,
+        state.eofReached,
+    ])
+
     const shouldConfirmEarlySkip = state.duration > 0
         && remainingTime > NEXT_EPISODE_CONFIRM_REMAINING_SECONDS
         && (state.currentTime / state.duration) < NEXT_EPISODE_CONFIRM_PROGRESS_THRESHOLD
